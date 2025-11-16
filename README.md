@@ -38,7 +38,7 @@ I've also coded it to be accessible to all devs - I've not split it out into cla
 2. The program parses the book, finding where the start/stop character index of each page is when it first loads by keeping track of an xPos/yPos variable and measuring lines of text (that AREN'T actually rendered, just measured). This doesn't QUITE map to the display function, so the end of each page doesn't quite stop at the same place at the bottom of the page. It needs improving!
 
 
-## M5Paper S3 Version
+**M5Paper S3 Version**
    For M5Paper S3 users, use `EReader_S3\EReader_S3.ino` instead.
    This is a working prototype just like the original version, except for M5paperS3. 
    So it has all the issues and improvements needed.
@@ -47,6 +47,11 @@ I've also coded it to be accessible to all devs - I've not split it out into cla
 <p align="center" width="100%">
     <img width="33%" src="https://user-images.githubusercontent.com/1586332/131074409-0bc8815d-7d46-448b-8ae6-1407bf49db1f.jpg">
 </p>
+
+**M5Paper S3 Version**
+   For M5Paper S3 users, use `EReader_S3\EReader_S3.ino` instead.
+   This is a working prototype just like the original version, except for M5paperS3. 
+   So it has all the issues and improvements needed.
 
 
 
