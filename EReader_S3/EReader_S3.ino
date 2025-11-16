@@ -8,6 +8,11 @@
  * Required libraries:
  * - M5Unified (>= 0.2.5)
  * - M5GFX (>= 0.2.7)
+ *
+ * v2: Added character replacement in textSubstring to handle all
+ * common "smart" characters (curly quotes, em-dashes, ellipses, etc.).
+ * Also, fixed a layout bug in displayPage to correctly handle
+ * line breaks and word wrapping to match the pagination logic.
  */
 
 #include <M5Unified.h>
@@ -36,10 +41,94 @@ const int TOUCH_RIGHT = (SCREEN_WIDTH * 2) / 3;
 #define SD_SPI_MOSI_PIN 38
 #define SD_SPI_MISO_PIN 40
 
+/**
+ * @brief Extracts a substring and replaces a wide range of "smart"
+ * punctuation with standard ASCII equivalents that the font can render.
+ * * This function reads bytes from the textFile buffer and builds a String.
+ * It checks for multi-byte UTF-8 sequences and single-byte Windows-1252
+ * sequences for characters like curly quotes, em-dashes, ellipses, etc.,
+ * and replaces them with standard characters (', ", -, ...).
+ */
 String textSubstring(uint8_t *textFile, int startPtr, int endPtr) {
   String s = "";
+  // Pre-allocate memory, add a little extra for replacements like ... and (c)
+  s.reserve(endPtr - startPtr + 50); 
+
   for (int i = startPtr; i < endPtr; i++) {
-    s += (char) textFile[i];
+    uint8_t b1 = textFile[i];
+
+    // --- Check for 3-byte UTF-8 sequences (E2 80 xx) ---
+    if (b1 == 0xE2 && i + 2 < endPtr) {
+      uint8_t b2 = textFile[i+1];
+      uint8_t b3 = textFile[i+2];
+
+      if (b2 == 0x80) {
+        switch (b3) {
+          case 0x98: // ‘ (Left single quote)
+          case 0x99: // ’ (Right single quote / apostrophe)
+          case 0xB2: // ′ (Prime)
+            s += '\'';
+            i += 2;
+            continue;
+          case 0x9C: // “ (Left double quote)
+          case 0x9D: // ” (Right double quote)
+            s += '"';
+            i += 2;
+            continue;
+          case 0x94: // — (Em dash)
+            s += '-';
+            i += 2;
+            continue;
+          case 0xA6: // … (Ellipsis)
+            s += "...";
+            i += 2;
+            continue;
+          case 0xA2: // • (Bullet)
+            s += '*';
+            i += 2;
+            continue;
+        }
+      }
+    }
+
+    // --- Check for 2-byte UTF-8 sequences (C2 xx) ---
+    if (b1 == 0xC2 && i + 1 < endPtr) {
+      uint8_t b2 = textFile[i+1];
+      
+      if (b2 == 0xA9) { // © (Copyright)
+        s += "(c)";
+        i += 1;
+        continue;
+      }
+    }
+
+    // --- Check for 1-byte Windows-1252 sequences ---
+    switch (b1) {
+      case 0x91: // ‘ (Left single quote)
+      case 0x92: // ’ (Right single quote / apostrophe)
+        s += '\'';
+        continue;
+      case 0x93: // “ (Left double quote)
+      case 0x94: // ” (Right double quote)
+        s += '"';
+        continue;
+      case 0x97: // — (Em dash)
+        s += '-';
+        continue;
+      case 0x85: // … (Ellipsis)
+        s += "...";
+        continue;
+      case 0x95: // • (Bullet)
+        s += '*';
+        continue;
+      case 0xA9: // © (Copyright)
+        s += "(c)";
+        continue;
+    }
+
+    // --- If no special character matched, add the byte as a char ---
+    // Pass through all other characters, including \r and \n
+    s += (char) b1;
   }
   return s;
 }
@@ -96,6 +185,12 @@ int getNextPage(uint8_t *textFile, int startPtr, int textLength) {
   
   while ( !reachedEndOfBook(wordStart + startPtr, textLength - 500) ) {
     wordEnd = textIndexOfSpaceCR(textFile, startPtr + wordStart + 1, textLength) - startPtr;
+    
+    // Handle end of file case
+    if (wordEnd == -1 - startPtr) {
+        wordEnd = textLength - startPtr;
+    }
+
     String text = textSubstring(textFile, startPtr + wordStart, startPtr + wordEnd);
     int textPixelLength = M5.Display.textWidth(text.c_str());
     
@@ -129,28 +224,73 @@ void findPageStartStop(uint8_t *textFile, int textLength) {
   }
 }
 
+// Helper function to find next space or CR in a String
+int findNextWordBreak(String &s, int start) {
+  for (int i = start; i < s.length(); i++) {
+    if (s.charAt(i) == ' ' || s.charAt(i) == '\r') {
+      return i;
+    }
+  }
+  return -1; // No break found
+}
+
+/**
+ * @brief Displays a page of text, correctly handling word wrap and newlines.
+ * * This function re-creates the layout logic from getNextPage, but
+ * actually prints the words to the display. It processes the page text
+ * word by word, where words are separated by ' ' or '\r'.
+ */
 void displayPage(uint8_t *textFile, aPage page) {
   M5.Display.fillScreen(TFT_WHITE);
   M5.Display.setTextColor(TFT_BLACK);
   M5.Display.setTextSize(1);
   M5.Display.setCursor(border, border + 20);
   
+  // Get the processed text for the entire page
   String text = textSubstring(textFile, page.start, page.end);
+  
   int wordStart = 0;
   int wordEnd = 0;
-  
-  while ( (text.indexOf(' ', wordStart) >= 0) && ( wordStart <= text.length())) {
-    wordEnd = text.indexOf(' ', wordStart + 1);
-    if (wordEnd == -1) wordEnd = text.length();
+
+  // Loop through the text, word by word
+  while (wordStart < text.length()) {
     
+    // Check for and handle leading spaces or CRs
+    if (text.charAt(wordStart) == ' ' || text.charAt(wordStart) == '\r') {
+      if (text.charAt(wordStart) == '\r') {
+        // Handle explicit newline
+        M5.Display.setCursor(border, M5.Display.getCursorY() + 22);
+      } else {
+        // Handle space - print it to advance cursor
+        M5.Display.print(' ');
+      }
+      wordStart++; // Move to next character
+      continue; // Loop again
+    }
+
+    // Now wordStart is at the beginning of a word
+    wordEnd = findNextWordBreak(text, wordStart);
+    
+    // If no more breaks, the rest of the string is the last word
+    if (wordEnd == -1) {
+      wordEnd = text.length();
+    }
+
+    // Extract the word
     String word = text.substring(wordStart, wordEnd);
     uint16_t len = M5.Display.textWidth(word.c_str());
     
-    if (M5.Display.getCursorX() + len >= SCREEN_WIDTH - border) {
+    // Check if the word fits on the current line
+    // (Only check if we're not at the beginning of the line)
+    if (M5.Display.getCursorX() > border && (M5.Display.getCursorX() + len >= SCREEN_WIDTH - border)) {
+      // It doesn't fit, move to the next line
       M5.Display.setCursor(border, M5.Display.getCursorY() + 22);
-      wordStart++;
     }
+    
+    // Print the word
     M5.Display.print(word);
+    
+    // Move to the start of the next token (which is at wordEnd)
     wordStart = wordEnd;
   }
 
@@ -174,7 +314,7 @@ void setup() {
   
   // Initialize display
   M5.Display.setRotation(0);
-  M5.Display.setFont(&fonts::FreeSansOblique12pt7b);
+  M5.Display.setFont(&fonts::FreeSans9pt7b);
   M5.Display.setTextSize(1);
   
   M5.Display.fillScreen(TFT_WHITE);
