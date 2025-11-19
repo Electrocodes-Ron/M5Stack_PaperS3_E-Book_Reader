@@ -1,14 +1,15 @@
 /*
  * E-Book reader for M5Paper S3
- * * v5: 
- * - SYNCHRONIZED LAYOUT ENGINE: getNextPage now mirrors displayPage logic 1:1.
- * This fixes the "overflowing text" and "empty bottom space" issues.
- * - Both functions now process text as "Tokens" (Space, Newline, or Word) 
- * to ensure the calculated page ending exactly matches the displayed page.
+ * * v7: 
+ * - FEATURE: Lockscreen Image. When locking (middle tap), it now looks for
+ * "/background.png" on the SD card root. If found, it displays it.
+ * If not found, it falls back to the "Sleeping..." text.
+ * - FIX: Manually opens the File object for drawPng to resolve compilation 
+ * errors with ESP32 Core 3.x.
  */
 
+#include <SD.h> // MUST be included before M5Unified.h
 #include <M5Unified.h>
-#include <SD.h>
 #include <ctype.h>
 
 const char *DATA_FILE = "/pageNumber.txt";
@@ -16,7 +17,7 @@ const char *DATA_FILE = "/pageNumber.txt";
 int currentPage = 0;
 int pageCount = 0;
 int border = 10;
-int lineHeight = 22; // Standardized line height
+int lineHeight = 25; // Increased slightly for better readability
 uint8_t *textFile;
 
 struct aPage {
@@ -116,15 +117,15 @@ int getNextPage(uint8_t *textFile, int startPtr, int textLength) {
   int yCursor = border + 20;
   
   int xMax = SCREEN_WIDTH - border;
-  int yMax = SCREEN_HEIGHT - 40; // Stop above footer
+  int yMax = SCREEN_HEIGHT - (2*lineHeight); // Stop above footer
   
   int ptr = startPtr;
   
   while (ptr < textLength) {
     uint8_t c = textFile[ptr];
     
-    // 1. Handle Newlines
-    if (c == '\r') {
+    // 1. Handle Newlines (LF)
+    if (c == '\n') {
       xCursor = border;
       yCursor += lineHeight;
       ptr++; // Consume CR
@@ -134,8 +135,8 @@ int getNextPage(uint8_t *textFile, int startPtr, int textLength) {
       continue;
     }
     
-    // 2. Handle Line Feeds (Ignore them, usually follow CR)
-    if (c == '\n') {
+    // 2. Handle Carriage Returns (CR)
+    if (c == '\r') {
       ptr++; 
       continue;
     }
@@ -227,14 +228,14 @@ void displayPage(uint8_t *textFile, aPage page) {
   while (ptr < endPtr) {
     uint8_t c = textFile[ptr];
     
-    // Newline
-    if (c == '\r') {
+    // Newline (LF)
+    if (c == '\n') {
       M5.Display.setCursor(border, M5.Display.getCursorY() + lineHeight);
       ptr++;
       continue;
     }
-    // Linefeed
-    if (c == '\n') {
+    // Carriage Return (CR)
+    if (c == '\r') {
       ptr++;
       continue;
     }
@@ -338,13 +339,33 @@ void loop() {
     }
     else {
       storePageSD(currentPage);
-      M5.Display.fillScreen(TFT_WHITE);
-      M5.Display.setCursor(SCREEN_WIDTH/2 - 50, SCREEN_HEIGHT/2);
-      M5.Display.print("Sleeping...");
+
+      // --- LOCK SCREEN LOGIC ---
+      bool drawn = false;
+      
+      // Check if custom background exists
+      if (SD.exists("/background.png")) {
+         // FIX: Open file manually and pass file object to drawPng
+         // This resolves the "no matching function" error on ESP32 Core 3.x
+         File bgFile = SD.open("/background.png", FILE_READ);
+         if (bgFile) {
+           M5.Display.fillScreen(TFT_WHITE); // Clear previous text
+           drawn = M5.Display.drawPng(&bgFile, 0, 0);
+           bgFile.close();
+         }
+      }
+
+      // Fallback if no image found or draw failed
+      if (!drawn) {
+        M5.Display.fillScreen(TFT_WHITE);
+        M5.Display.setCursor(SCREEN_WIDTH/2 - 50, SCREEN_HEIGHT/2);
+        M5.Display.print("Sleeping...");
+      }
+      
       delay(1000);
       M5.Power.powerOff();
     }
-    delay(200);
+    delay(200); // Debounce
   }
   delay(50);
 }
